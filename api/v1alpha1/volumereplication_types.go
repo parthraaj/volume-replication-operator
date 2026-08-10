@@ -82,14 +82,15 @@ type VolumeReplicationStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// observedGeneration is the last generation change the operator has dealt with
 	// +optional
-	ObservedGeneration int64            `json:"observedGeneration,omitempty"`
-	LastStartTime      *metav1.Time     `json:"lastStartTime,omitempty"`
-	LastCompletionTime *metav1.Time     `json:"lastCompletionTime,omitempty"`
-	LastSyncTime       *metav1.Time     `json:"lastSyncTime,omitempty"`
-	LastSyncBytes      *int64           `json:"lastSyncBytes,omitempty"`
-	LastSyncDuration   *metav1.Duration `json:"lastSyncDuration,omitempty"`
-	ReplicationStatus  string           `json:"replicationStatus,omitempty"`
-	StatusMessage      string           `json:"statusMessage,omitempty"`
+	ObservedGeneration  int64            `json:"observedGeneration,omitempty"`
+	LastStartTime       *metav1.Time     `json:"lastStartTime,omitempty"`
+	LastCompletionTime  *metav1.Time     `json:"lastCompletionTime,omitempty"`
+	LastSyncTime        *metav1.Time     `json:"lastSyncTime,omitempty"`
+	LastSyncBytes       *int64           `json:"lastSyncBytes,omitempty"`
+	LastSyncDuration    *metav1.Duration `json:"lastSyncDuration,omitempty"`
+	DestinationVolumeID string           `json:"destinationVolumeID,omitempty"`
+	ReplicationStatus   string           `json:"replicationStatus,omitempty"`
+	StatusMessage       string           `json:"statusMessage,omitempty"`
 }
 
 // +kubebuilder:object:root=true

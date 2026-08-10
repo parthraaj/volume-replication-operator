@@ -31,6 +31,7 @@ import (
 	replicationlib "github.com/csi-addons/spec/lib/go/replication"
 	"github.com/go-logr/logr"
 	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -54,9 +55,11 @@ const (
 )
 
 var (
-	volumePromotionKnownErrors    = []codes.Code{codes.FailedPrecondition}
-	disableReplicationKnownErrors = []codes.Code{codes.NotFound}
-	getReplicationInfoKnownErrors = []codes.Code{codes.NotFound}
+	volumePromotionKnownErrors               = []codes.Code{codes.FailedPrecondition}
+	disableReplicationKnownErrors            = []codes.Code{codes.NotFound}
+	getReplicationInfoKnownErrors            = []codes.Code{codes.NotFound}
+	getReplicationDestinationInfoKnownErrors = []codes.Code{codes.NotFound, codes.Unimplemented}
+	promoteRemoteNotReadyErrors              = []codes.Code{codes.Internal}
 )
 
 // VolumeReplicationReconciler reconciles a VolumeReplication object.
@@ -73,6 +76,7 @@ type VolumeReplicationReconciler struct {
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumereplications,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumereplications/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumereplications/finalizers,verbs=update
+// +kubebuilder:rbac:groups=ramendr.openshift.io,resources=volumereplicationgroups,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -243,11 +247,24 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	} else {
 		if contains(instance.GetFinalizers(), volumeReplicationFinalizer) {
-			err = r.disableVolumeReplication(logger, replicationSource, replicationHandle, parameters, secret)
-			if err != nil {
-				logger.Error(err, "failed to disable replication")
 
-				return ctrl.Result{}, err
+			// If the user's desired state is Secondary OR the storage is currently in a Secondary state,
+			// skip the gRPC call to DisableVolumeReplication entirely.
+			if instance.Spec.ReplicationState == replicationv1alpha1.Secondary ||
+				instance.Status.State == replicationv1alpha1.SecondaryState {
+
+				logger.Info("Skipping DisableVolumeReplication gRPC call: VR object is in Secondary state",
+					"VRName", instance.Name,
+					"SpecState", instance.Spec.ReplicationState,
+					"StatusState", instance.Status.State)
+
+			} else {
+				err = r.disableVolumeReplication(logger, replicationSource, replicationHandle, parameters, secret)
+				if err != nil {
+					logger.Error(err, "failed to disable replication")
+
+					return ctrl.Result{}, err
+				}
 			}
 
 			if pvc != nil {
@@ -289,6 +306,14 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		logger.Error(err, "failed to update status")
 
 		return reconcile.Result{}, err
+	}
+
+	// skip enable and promote gRPC calls if parent VRG desires secondary
+	if instance.Spec.ReplicationState == replicationv1alpha1.Primary &&
+		r.isParentVRGSecondary(ctx, instance, logger) {
+		logger.Info("skipping EnableReplication and Promote: parent VRG is secondary",
+			"VRName", instance.Name)
+		return ctrl.Result{}, nil
 	}
 
 	// enable replication on every reconcile
@@ -369,6 +394,18 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			logger.Error(err, "failed to update volumeReplication status", "VRName", instance.Name)
 		}
 
+		if grpcStatus, ok := grpcstatus.FromError(replicationErr); ok &&
+			instance.Spec.ReplicationState == replicationv1alpha1.Primary {
+			for _, code := range promoteRemoteNotReadyErrors {
+				if grpcStatus.Code() == code {
+					logger.Info("secondary storage not ready for promotion, requeuing",
+						"VRName", instance.Name,
+						"RequeueAfter", "5s")
+					return ctrl.Result{Requeue: true, RequeueAfter: 5 * time.Second}, nil
+				}
+			}
+		}
+
 		if instance.Status.State == replicationv1alpha1.SecondaryState {
 			return ctrl.Result{
 				Requeue: true,
@@ -408,7 +445,10 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	requeueForInfo := false
 
-	if instance.Spec.ReplicationState == replicationv1alpha1.Primary {
+	isRamenFlow := instance.Spec.DataSource.Kind == pvcDataSource && parameters["replication_policy"] != ""
+	isTraditionalVGFlow := instance.Spec.DataSource.Kind == volumeGroupDataSource
+
+	if instance.Spec.ReplicationState == replicationv1alpha1.Primary && (isRamenFlow || isTraditionalVGFlow) {
 		info, infoErr := r.getVolumeReplicationInfo(instance, logger, replicationSource, replicationHandle, secret)
 		if infoErr != nil {
 			uErr := r.updateReplicationStatus(ctx, instance, logger, getReplicationState(instance), msg)
@@ -445,6 +485,34 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			instance.Status.StatusMessage = info.GetStatusMessage()
 
 			requeueForInfo = true
+		}
+	}
+
+	if isRamenFlow {
+		destInfo, destErr := r.getReplicationDestinationInfo(instance, logger, replicationSource, secret)
+		if destErr != nil {
+			setDestinationInfoFailedCondition(&instance.Status.Conditions, instance.Generation,
+				instance.Spec.DataSource.Kind, destErr.Error())
+		} else if destInfo != nil {
+			replicationDest := destInfo.GetReplicationDestination()
+			if replicationDest != nil {
+				if volDest := replicationDest.GetVolume(); volDest != nil {
+					instance.Status.DestinationVolumeID = volDest.GetVolumeId()
+				}
+				setDestinationInfoAvailableCondition(&instance.Status.Conditions, instance.Generation,
+					instance.Spec.DataSource.Kind)
+			} else {
+				instance.Status.DestinationVolumeID = ""
+				setDestinationInfoPendingCondition(&instance.Status.Conditions, instance.Generation,
+					instance.Spec.DataSource.Kind)
+
+				uErr := r.updateReplicationStatus(ctx, instance, logger, getReplicationState(instance), msg)
+				if uErr != nil {
+					logger.Error(uErr, "failed to update volumeReplication status", "VRName", instance.Name)
+				}
+				logger.Info("destination info pending, requeuing in 30s")
+				return ctrl.Result{Requeue: true, RequeueAfter: 30 * time.Second}, nil
+			}
 		}
 	}
 
@@ -865,6 +933,42 @@ func (r *VolumeReplicationReconciler) getVolumeReplicationInfo(
 	return infoResp, nil
 }
 
+func (r *VolumeReplicationReconciler) getReplicationDestinationInfo(
+	instance *replicationv1alpha1.VolumeReplication,
+	logger logr.Logger,
+	replicationSource *replicationlib.ReplicationSource,
+	secrets map[string]string,
+) (*replicationlib.GetReplicationDestinationInfoResponse, error) {
+	params := replication.CommonRequestParameters{
+		ReplicationSource: replicationSource,
+		Secrets:           secrets,
+		Replication:       r.Replication,
+		Parameters:        map[string]string{},
+	}
+
+	vr := replication.Replication{Params: params}
+	resp := vr.GetDestinationInfo()
+
+	if resp.Error != nil {
+		logger.Error(resp.Error, "failed to get replication destination info", "VRName", instance.Name)
+		if isKnownError := resp.HasKnownGRPCError(getReplicationDestinationInfoKnownErrors); isKnownError {
+			logger.Info("replication destination info not found or not implemented, skipping",
+				"VRName", instance.Name)
+			return nil, nil
+		}
+		return nil, resp.Error
+	}
+
+	destResp, ok := resp.Response.(*replicationlib.GetReplicationDestinationInfoResponse)
+
+	if !ok {
+		err := fmt.Errorf("received response of unexpected type")
+		logger.Error(err, "unable to parse GetReplicationDestinationInfo response", "VRName", instance.Name)
+		return nil, err
+	}
+	return destResp, nil
+}
+
 func getInfoReconcileInterval(parameters map[string]string, logger logr.Logger) time.Duration {
 	rawScheduleTime := parameters["schedulingInterval"]
 	if rawScheduleTime == "" {
@@ -875,11 +979,7 @@ func getInfoReconcileInterval(parameters map[string]string, logger logr.Logger) 
 		logger.Error(err, "failed to parse schedulingInterval, using default", "value", rawScheduleTime)
 		return defaultScheduleTime
 	}
-	if scheduleTime < 2*time.Minute {
-		logger.Info("schedulingInterval is less than 2 minutes, not halving it")
-		return scheduleTime
-	}
-	return scheduleTime / 2
+	return scheduleTime
 }
 
 func protoReplicationStatusToString(status replicationlib.GetVolumeReplicationInfoResponse_Status) string {
@@ -893,4 +993,29 @@ func protoReplicationStatusToString(status replicationlib.GetVolumeReplicationIn
 	default:
 		return "Unknown"
 	}
+}
+
+func (r *VolumeReplicationReconciler) isParentVRGSecondary(ctx context.Context, instance *replicationv1alpha1.VolumeReplication, logger logr.Logger) bool {
+	for _, ref := range instance.GetOwnerReferences() {
+		if ref.Kind == "VolumeReplicationGroup" {
+			vrg := &unstructured.Unstructured{}
+			vrg.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   "ramendr.openshift.io",
+				Version: "v1alpha1",
+				Kind:    "VolumeReplicationGroup",
+			})
+			if err := r.Get(ctx, types.NamespacedName{
+				Name:      ref.Name,
+				Namespace: instance.Namespace,
+			}, vrg); err != nil {
+				logger.Error(err, "failed to get parent VRG", "VRGName", ref.Name)
+				return false
+			}
+			state, found, _ := unstructured.NestedString(vrg.Object, "spec", "replicationState")
+			if found && replicationv1alpha1.ReplicationState(state) == replicationv1alpha1.Secondary {
+				return true
+			}
+		}
+	}
+	return false
 }

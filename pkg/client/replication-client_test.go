@@ -171,7 +171,8 @@ func TestGetVolumeReplicationInfo(t *testing.T) {
 
 	// return success response
 	mockedGetVolumeReplicationInfo := &fake.ReplicationClient{
-		GetVolumeReplicationInfoMock: func(_ *replicationlib.ReplicationSource, _ string, _ map[string]string) (*replicationlib.GetVolumeReplicationInfoResponse, error) {
+		GetVolumeReplicationInfoMock: func(_ *replicationlib.ReplicationSource, _ string, _ map[string]string) (
+			*replicationlib.GetVolumeReplicationInfoResponse, error) {
 			return &replicationlib.GetVolumeReplicationInfoResponse{}, nil
 		},
 	}
@@ -183,7 +184,8 @@ func TestGetVolumeReplicationInfo(t *testing.T) {
 
 	// return error
 	mockedGetVolumeReplicationInfo = &fake.ReplicationClient{
-		GetVolumeReplicationInfoMock: func(_ *replicationlib.ReplicationSource, _ string, _ map[string]string) (*replicationlib.GetVolumeReplicationInfoResponse, error) {
+		GetVolumeReplicationInfoMock: func(_ *replicationlib.ReplicationSource, _ string, _ map[string]string) (
+			*replicationlib.GetVolumeReplicationInfoResponse, error) {
 			return nil, errors.New("failed to get volume replication info")
 		},
 	}
@@ -191,6 +193,37 @@ func TestGetVolumeReplicationInfo(t *testing.T) {
 	client = mockedGetVolumeReplicationInfo
 
 	resp, err = client.GetVolumeReplicationInfo(nil, "", nil)
+	require.Nil(t, resp)
+	require.Error(t, err)
+}
+
+func TestGetReplicationDestinationInfo(t *testing.T) {
+	t.Parallel()
+
+	// return success response
+	mockedGetReplicationDestinationInfo := &fake.ReplicationClient{
+		GetReplicationDestinationInfoMock: func(_ *replicationlib.ReplicationSource, _ map[string]string) (
+			*replicationlib.GetReplicationDestinationInfoResponse, error) {
+			return &replicationlib.GetReplicationDestinationInfoResponse{}, nil
+		},
+	}
+	client := mockedGetReplicationDestinationInfo
+
+	resp, err := client.GetReplicationDestinationInfo(nil, nil)
+	require.Equal(t, &replicationlib.GetReplicationDestinationInfoResponse{}, resp)
+	require.NoError(t, err)
+
+	// return error
+	mockedGetReplicationDestinationInfo = &fake.ReplicationClient{
+		GetReplicationDestinationInfoMock: func(_ *replicationlib.ReplicationSource, _ map[string]string) (
+			*replicationlib.GetReplicationDestinationInfoResponse, error) {
+			return nil, errors.New("failed to get replication destination info")
+		},
+	}
+
+	client = mockedGetReplicationDestinationInfo
+
+	resp, err = client.GetReplicationDestinationInfo(nil, nil)
 	require.Nil(t, resp)
 	require.Error(t, err)
 }

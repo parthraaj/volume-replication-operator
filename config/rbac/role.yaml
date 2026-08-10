@@ -5,6 +5,12 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ramendr.openshift.io
+  resources:
+  - volumereplicationgroups
+  verbs:
+  - get
+- apiGroups:
   - replication.storage.openshift.io
   resources:
   - volumereplications

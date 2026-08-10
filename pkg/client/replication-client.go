@@ -52,6 +52,9 @@ type VolumeReplication interface {
 	// GetVolumeReplicationInfo RPC call to get the volume replication info.
 	GetVolumeReplicationInfo(replicationSource *replicationlib.ReplicationSource, replicationID string,
 		secrets map[string]string) (*replicationlib.GetVolumeReplicationInfoResponse, error)
+	// GetReplicationDestinationInfo RPC call to get the replication destination info.
+	GetReplicationDestinationInfo(replicationSource *replicationlib.ReplicationSource,
+		secrets map[string]string) (*replicationlib.GetReplicationDestinationInfoResponse, error)
 }
 
 // NewReplicationClient returns VolumeReplication interface which has the RPC
@@ -172,6 +175,23 @@ func (rc *replicationClient) GetVolumeReplicationInfo(
 	defer cancel()
 
 	resp, err := rc.client.GetVolumeReplicationInfo(createCtx, req)
+
+	return resp, err
+}
+
+func (rc *replicationClient) GetReplicationDestinationInfo(
+	replicationSource *replicationlib.ReplicationSource,
+	secrets map[string]string,
+) (*replicationlib.GetReplicationDestinationInfoResponse, error) {
+	req := &replicationlib.GetReplicationDestinationInfoRequest{
+		ReplicationSource: replicationSource,
+		Secrets:           secrets,
+	}
+
+	createCtx, cancel := context.WithTimeout(context.Background(), rc.timeout)
+	defer cancel()
+
+	resp, err := rc.client.GetReplicationDestinationInfo(createCtx, req)
 
 	return resp, err
 }
