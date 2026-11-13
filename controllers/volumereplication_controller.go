@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -638,8 +639,11 @@ func (r *VolumeReplicationReconciler) SetupWithManager(mgr ctrl.Manager, cfg *co
 	r.GRPCClient = gClient
 	r.Replication = grpcClient.NewReplicationClient(r.GRPCClient.Client, cfg.RPCTimeout)
 
+	r.Log.Info("starting VolumeReplication controller", "MaxConcurrentReconciles", cfg.MaxConcurrentReconciles)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&replicationv1alpha1.VolumeReplication{}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: cfg.MaxConcurrentReconciles}).
 		WithEventFilter(pred).Complete(r)
 }
 

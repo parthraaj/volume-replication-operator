@@ -29,6 +29,8 @@ type DriverConfig struct {
 	DriverName string
 	// RPCTimeout for RPCs to the CSI driver.
 	RPCTimeout time.Duration
+	// MaxConcurrentReconciles is the number of VolumeReplications processed at the same time.
+	MaxConcurrentReconciles int
 }
 
 // NewDriverConfig returns the newly initialized DriverConfig.
@@ -41,6 +43,10 @@ func (cfg *DriverConfig) Validate() error {
 	// check driver name is set
 	if cfg.DriverName == "" {
 		return errors.New("driverName is empty")
+	}
+
+	if cfg.MaxConcurrentReconciles < 1 {
+		return errors.New("max-concurrent-reconciles must be at least 1")
 	}
 
 	return nil
