@@ -89,8 +89,6 @@ type VolumeReplicationStatus struct {
 	LastSyncBytes       *int64           `json:"lastSyncBytes,omitempty"`
 	LastSyncDuration    *metav1.Duration `json:"lastSyncDuration,omitempty"`
 	DestinationVolumeID string           `json:"destinationVolumeID,omitempty"` //nolint:tagliatelle
-	Status              string           `json:"status,omitempty"`
-	StatusMessage       string           `json:"statusMessage,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -457,6 +457,8 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if requeueForResync {
 		logger.Info("volume is not ready to use, requeuing for resync")
+		// the Replicating condition is reported only for a primary volume
+		instance.Status.Conditions = removeCondition(&instance.Status.Conditions, ConditionReplicating)
 
 		err = r.updateReplicationStatus(ctx, instance, logger, getCurrentReplicationState(instance), "volume is degraded")
 		if err != nil {
@@ -498,6 +500,11 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 		info, infoErr := r.getVolumeReplicationInfo(instance, logger, replicationSource, replicationHandle, secret)
 		if infoErr != nil {
+			if !replication.HasKnownGRPCError(infoErr, []codes.Code{codes.Unimplemented}) {
+				setUnknownReplicationCondition(&instance.Status.Conditions, instance.Generation,
+					instance.Spec.DataSource.Kind, infoErr.Error())
+			}
+
 			uErr := r.updateReplicationStatus(ctx, instance, logger, getReplicationState(instance), msg)
 			if uErr != nil {
 				logger.Error(uErr, "failed to update volumeReplication status", "VRName", instance.Name)
@@ -530,11 +537,15 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				instance.Status.LastSyncBytes = nil
 			}
 
-			instance.Status.Status = protoReplicationStatusToString(info.GetStatus())
-			instance.Status.StatusMessage = info.GetStatusMessage()
+			setReplicationCondition(instance, info.GetStatusMessage(), info.GetStatus())
 
 			requeueForInfo = true
 		}
+	}
+
+	if instance.Spec.ReplicationState == replicationv1alpha1.Secondary {
+		// the Replicating condition is reported only for a primary volume
+		instance.Status.Conditions = removeCondition(&instance.Status.Conditions, ConditionReplicating)
 	}
 
 	if isRamenFlow {
@@ -1063,17 +1074,19 @@ func getInfoReconcileInterval(parameters map[string]string, logger logr.Logger) 
 	return scheduleTime
 }
 
-func protoReplicationStatusToString(status replicationlib.GetVolumeReplicationInfoResponse_Status) string {
-	switch status {
-	case replicationlib.GetVolumeReplicationInfoResponse_HEALTHY:
-		return "Healthy"
-	case replicationlib.GetVolumeReplicationInfoResponse_DEGRADED:
-		return "Degraded"
-	case replicationlib.GetVolumeReplicationInfoResponse_ERROR:
-		return "Error"
+// setReplicationCondition sets the Replicating condition from the replication status reported by the driver.
+func setReplicationCondition(instance *replicationv1alpha1.VolumeReplication, statusMessage string,
+	replicationStatus replicationlib.GetVolumeReplicationInfoResponse_Status,
+) {
+	switch replicationStatus {
 	case replicationlib.GetVolumeReplicationInfoResponse_UNKNOWN:
-		return "Unknown"
-	default:
-		return "Unknown"
+		setUnknownReplicationCondition(&instance.Status.Conditions, instance.Generation,
+			instance.Spec.DataSource.Kind, statusMessage)
+	case replicationlib.GetVolumeReplicationInfoResponse_HEALTHY:
+		setHealthyReplicationCondition(&instance.Status.Conditions, instance.Generation,
+			instance.Spec.DataSource.Kind, statusMessage)
+	case replicationlib.GetVolumeReplicationInfoResponse_DEGRADED, replicationlib.GetVolumeReplicationInfoResponse_ERROR:
+		setDegradedReplicationCondition(&instance.Status.Conditions, instance.Generation,
+			instance.Spec.DataSource.Kind, statusMessage)
 	}
 }

@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,6 +29,7 @@ const (
 	ConditionDegraded                 = "Degraded"
 	ConditionResyncing                = "Resyncing"
 	ConditionDestinationInfoAvailable = "DestinationInfoAvailable"
+	ConditionReplicating              = "Replicating"
 )
 
 const (
@@ -40,6 +42,9 @@ const (
 	MessageDestinationInfoAvailable = "destination info is available"
 	MessageDestinationInfoPending   = "destination info is pending update"
 	MessageDestinationInfoFailed    = "failed to get destination info"
+	MessageReplicating              = "is replicating"
+	MessageNotReplicating           = "is not replicating"
+	MessageUnknownReplicationState  = "replication status is unknown"
 )
 
 const (
@@ -54,6 +59,8 @@ const (
 	ResyncTriggered = "ResyncTriggered"
 	FailedToResync  = "FailedToResync"
 	NotResyncing    = "NotResyncing"
+	Replicating     = "Replicating"
+	NotReplicating  = "NotReplicating"
 )
 
 // sets conditions when volume was promoted successfully.
@@ -298,5 +305,48 @@ func setDestinationInfoFailedCondition(conditions *[]metav1.Condition, observedG
 		ObservedGeneration: observedGeneration,
 		Status:             metav1.ConditionFalse,
 		Message:            fmt.Sprintf("%s %s: %s", source, MessageDestinationInfoFailed, errorMessage),
+	})
+}
+
+// sets ConditionUnknown for ConditionReplicating condition in VR status.Conditions.
+func setUnknownReplicationCondition(conditions *[]metav1.Condition, observedGeneration int64, dataSource, statusMessage string) {
+	source := getSource(dataSource)
+	setStatusCondition(conditions, &metav1.Condition{
+		Message:            fmt.Sprintf("%s %s: %s", source, MessageUnknownReplicationState, statusMessage),
+		Type:               ConditionReplicating,
+		Reason:             Replicating,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionUnknown,
+	})
+}
+
+// sets ConditionTrue for ConditionReplicating condition in VR status.Conditions.
+func setHealthyReplicationCondition(conditions *[]metav1.Condition, observedGeneration int64, dataSource, statusMessage string) {
+	source := getSource(dataSource)
+	setStatusCondition(conditions, &metav1.Condition{
+		Message:            fmt.Sprintf("%s %s: %s", source, MessageReplicating, statusMessage),
+		Type:               ConditionReplicating,
+		Reason:             Replicating,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionTrue,
+	})
+}
+
+// sets ConditionFalse for ConditionReplicating condition in VR status.Conditions.
+func setDegradedReplicationCondition(conditions *[]metav1.Condition, observedGeneration int64, dataSource, statusMessage string) {
+	source := getSource(dataSource)
+	setStatusCondition(conditions, &metav1.Condition{
+		Message:            fmt.Sprintf("%s %s: %s", source, MessageNotReplicating, statusMessage),
+		Type:               ConditionReplicating,
+		Reason:             NotReplicating,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionFalse,
+	})
+}
+
+// removeCondition returns the conditions without the given condition type.
+func removeCondition(conditions *[]metav1.Condition, conditionType string) []metav1.Condition {
+	return slices.DeleteFunc(*conditions, func(condition metav1.Condition) bool {
+		return condition.Type == conditionType
 	})
 }
