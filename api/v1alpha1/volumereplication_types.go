@@ -54,6 +54,7 @@ const (
 type VolumeReplicationSpec struct {
 	// VolumeReplicationClass is the VolumeReplicationClass name for this VolumeReplication resource
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="volumeReplicationClass is immutable"
 	VolumeReplicationClass string `json:"volumeReplicationClass"`
 
 	// ReplicationState represents the replication operation to be performed on the volume.
@@ -63,10 +64,12 @@ type VolumeReplicationSpec struct {
 
 	// DataSource represents the object associated with the volume
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="dataSource is immutable"
 	DataSource corev1.TypedLocalObjectReference `json:"dataSource"`
 
 	// AutoResync represents the volume to be auto resynced when
 	// ReplicationState is "secondary"
+	// +kubebuilder:default:=false
 	AutoResync bool `json:"autoResync"`
 
 	// replicationHandle represents an existing (but new) replication id
@@ -82,20 +85,25 @@ type VolumeReplicationStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// observedGeneration is the last generation change the operator has dealt with
 	// +optional
-	ObservedGeneration  int64            `json:"observedGeneration,omitempty"`
-	LastStartTime       *metav1.Time     `json:"lastStartTime,omitempty"`
-	LastCompletionTime  *metav1.Time     `json:"lastCompletionTime,omitempty"`
-	LastSyncTime        *metav1.Time     `json:"lastSyncTime,omitempty"`
-	LastSyncBytes       *int64           `json:"lastSyncBytes,omitempty"`
-	LastSyncDuration    *metav1.Duration `json:"lastSyncDuration,omitempty"`
-	DestinationVolumeID string           `json:"destinationVolumeID,omitempty"` //nolint:tagliatelle
+	ObservedGeneration int64            `json:"observedGeneration,omitempty"`
+	LastStartTime      *metav1.Time     `json:"lastStartTime,omitempty"`
+	LastCompletionTime *metav1.Time     `json:"lastCompletionTime,omitempty"`
+	LastSyncTime       *metav1.Time     `json:"lastSyncTime,omitempty"`
+	LastSyncBytes      *int64           `json:"lastSyncBytes,omitempty"`
+	LastSyncDuration   *metav1.Duration `json:"lastSyncDuration,omitempty"`
+	// DestinationVolumeID is the volume ID on the destination/target side.
+	// This field is set when the SP reports different source and destination
+	// volume IDs.
+	// +optional
+	DestinationVolumeID string `json:"destinationVolumeID,omitempty"` //nolint:tagliatelle
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:JSONPath=".metadata.creationTimestamp",name=Age,type=date
 // +kubebuilder:printcolumn:JSONPath=".spec.volumeReplicationClass",name=volumeReplicationClass,type=string
-// +kubebuilder:printcolumn:JSONPath=".spec.dataSource.name",name=pvcName,type=string
+// +kubebuilder:printcolumn:JSONPath=".spec.dataSource.kind",name=SourceKind,type=string
+// +kubebuilder:printcolumn:JSONPath=".spec.dataSource.name",name=SourceName,type=string
 // +kubebuilder:printcolumn:JSONPath=".spec.replicationState",name=desiredState,type=string
 // +kubebuilder:printcolumn:JSONPath=".status.state",name=currentState,type=string
 // +kubebuilder:resource:shortName=vr
@@ -105,7 +113,9 @@ type VolumeReplication struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   VolumeReplicationSpec   `json:"spec,omitempty"`
+	// +kubebuilder:validation:Required
+	Spec VolumeReplicationSpec `json:"spec"`
+
 	Status VolumeReplicationStatus `json:"status,omitempty"`
 }
 

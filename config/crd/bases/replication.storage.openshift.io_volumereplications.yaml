@@ -23,8 +23,11 @@ spec:
     - jsonPath: .spec.volumeReplicationClass
       name: volumeReplicationClass
       type: string
+    - jsonPath: .spec.dataSource.kind
+      name: SourceKind
+      type: string
     - jsonPath: .spec.dataSource.name
-      name: pvcName
+      name: SourceName
       type: string
     - jsonPath: .spec.replicationState
       name: desiredState
@@ -58,6 +61,7 @@ spec:
             description: VolumeReplicationSpec defines the desired state of VolumeReplication.
             properties:
               autoResync:
+                default: false
                 description: |-
                   AutoResync represents the volume to be auto resynced when
                   ReplicationState is "secondary"
@@ -83,6 +87,9 @@ spec:
                 - name
                 type: object
                 x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: dataSource is immutable
+                  rule: self == oldSelf
               replicationHandle:
                 description: replicationHandle represents an existing (but new) replication
                   id
@@ -100,6 +107,9 @@ spec:
                 description: VolumeReplicationClass is the VolumeReplicationClass
                   name for this VolumeReplication resource
                 type: string
+                x-kubernetes-validations:
+                - message: volumeReplicationClass is immutable
+                  rule: self == oldSelf
             required:
             - autoResync
             - dataSource
@@ -167,6 +177,10 @@ spec:
                   type: object
                 type: array
               destinationVolumeID:
+                description: |-
+                  DestinationVolumeID is the volume ID on the destination/target side.
+                  This field is set when the SP reports different source and destination
+                  volume IDs.
                 type: string
               lastCompletionTime:
                 format: date-time
@@ -193,6 +207,8 @@ spec:
                 description: State captures the latest state of the replication operation.
                 type: string
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true

@@ -23,13 +23,16 @@ import (
 // VolumeReplicationClassSpec specifies parameters that an underlying storage system uses
 // when creating a volume replica. A specific VolumeReplicationClass is used by specifying
 // its name in a VolumeReplication object.
+// +kubebuilder:validation:XValidation:rule="has(self.parameters) == has(oldSelf.parameters)",message="parameters are immutable"
 type VolumeReplicationClassSpec struct {
 	// Provisioner is the name of storage provisioner
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="provisioner is immutable"
 	Provisioner string `json:"provisioner"`
 	// Parameters is a key-value map with storage provisioner specific configurations for
 	// creating volume replicas
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="parameters are immutable"
 	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
@@ -40,13 +43,16 @@ type VolumeReplicationClassStatus struct{}
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=vrc
 // +kubebuilder:printcolumn:JSONPath=".spec.provisioner",name=provisioner,type=string
+// +kubebuilder:printcolumn:JSONPath=".metadata.creationTimestamp",name=Age,type=date
 
 // VolumeReplicationClass is the Schema for the volumereplicationclasses API.
 type VolumeReplicationClass struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   VolumeReplicationClassSpec   `json:"spec,omitempty"`
+	// +kubebuilder:validation:Required
+	Spec VolumeReplicationClassSpec `json:"spec"`
+
 	Status VolumeReplicationClassStatus `json:"status,omitempty"`
 }
 

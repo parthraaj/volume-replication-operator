@@ -20,6 +20,9 @@ spec:
     - jsonPath: .spec.provisioner
       name: provisioner
       type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -56,16 +59,27 @@ spec:
                   Parameters is a key-value map with storage provisioner specific configurations for
                   creating volume replicas
                 type: object
+                x-kubernetes-validations:
+                - message: parameters are immutable
+                  rule: self == oldSelf
               provisioner:
                 description: Provisioner is the name of storage provisioner
                 type: string
+                x-kubernetes-validations:
+                - message: provisioner is immutable
+                  rule: self == oldSelf
             required:
             - provisioner
             type: object
+            x-kubernetes-validations:
+            - message: parameters are immutable
+              rule: has(self.parameters) == has(oldSelf.parameters)
           status:
             description: VolumeReplicationClassStatus defines the observed state of
               VolumeReplicationClass.
             type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true
