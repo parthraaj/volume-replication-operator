@@ -581,6 +581,7 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if requeueForInfo {
 		interval := getInfoReconcileInterval(parameters, logger)
+		logger.Info("requeuing to get replication info", "VRName", instance.Name, "RequeueAfter", interval)
 
 		return ctrl.Result{Requeue: true, RequeueAfter: interval}, nil
 	}
@@ -1090,7 +1091,13 @@ func getInfoReconcileInterval(parameters map[string]string, logger logr.Logger) 
 		return defaultScheduleTime
 	}
 
-	return scheduleTime
+	if scheduleTime < 2*time.Minute {
+		logger.Info("scheduling interval is less than 2 minutes, not decreasing it to half")
+
+		return scheduleTime
+	}
+
+	return scheduleTime / 2
 }
 
 // setReplicationCondition sets the Replicating condition from the replication status reported by the driver.
