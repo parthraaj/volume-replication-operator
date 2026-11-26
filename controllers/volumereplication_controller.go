@@ -58,15 +58,13 @@ const (
 
 	promoteRetryOnSecondaryNotReadyRequeue = 10 * time.Second
 	promoteDeferredReplicationInfoRequeue  = 15 * time.Second
-	destinationInfoPendingRequeue          = 60 * time.Second
 )
 
 var (
-	volumePromotionKnownErrors               = []codes.Code{codes.FailedPrecondition}
-	disableReplicationKnownErrors            = []codes.Code{codes.NotFound}
-	getReplicationInfoKnownErrors            = []codes.Code{codes.NotFound}
-	getReplicationDestinationInfoKnownErrors = []codes.Code{codes.NotFound, codes.Unimplemented}
-	promoteRetryableErrors                   = []codes.Code{codes.Unavailable}
+	volumePromotionKnownErrors    = []codes.Code{codes.FailedPrecondition}
+	disableReplicationKnownErrors = []codes.Code{codes.NotFound}
+	getReplicationInfoKnownErrors = []codes.Code{codes.NotFound}
+	promoteRetryableErrors        = []codes.Code{codes.Unavailable}
 )
 
 // VolumeReplicationReconciler reconciles a VolumeReplication object.
@@ -321,6 +319,13 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return reconcile.Result{}, err
 	}
 
+	if isRamenFlow {
+		err = r.ensureDestinationInfoCondition(ctx, logger, instance)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
 	// enable replication on every reconcile
 	err = r.enableReplication(logger, replicationSource, replicationHandle, parameters, secret)
 	if err != nil {
@@ -548,38 +553,24 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		instance.Status.Conditions = removeCondition(&instance.Status.Conditions, ConditionReplicating)
 	}
 
-	if isRamenFlow {
-		destInfo, destErr := r.getReplicationDestinationInfo(instance, logger, replicationSource, secret)
+	if isRamenFlow && !isDestinationInfoAvailable(instance) {
+		destinationVolumeID, destErr := r.getReplicationDestinationVolumeID(instance, logger, replicationSource, secret)
 		if destErr != nil {
 			setDestinationInfoFailedCondition(&instance.Status.Conditions, instance.Generation,
-				instance.Spec.DataSource.Kind, destErr.Error())
-		} else if destInfo != nil {
-			replicationDest := destInfo.GetReplicationDestination()
-			if replicationDest != nil {
-				if volDest := replicationDest.GetVolume(); volDest != nil {
-					destinationVolumeID := volDest.GetVolumeId()
-					instance.Status.DestinationVolumeID = destinationVolumeID
-					logger.Info("destination volume id resolved", "VRName", instance.Name, "DestinationVolumeID", destinationVolumeID)
-				}
+				instance.Spec.DataSource.Kind, replication.GetMessageFromError(destErr))
 
-				setDestinationInfoAvailableCondition(&instance.Status.Conditions, instance.Generation,
-					instance.Spec.DataSource.Kind)
-			} else {
-				instance.Status.DestinationVolumeID = ""
-				setDestinationInfoPendingCondition(&instance.Status.Conditions, instance.Generation,
-					instance.Spec.DataSource.Kind)
-
-				uErr := r.updateReplicationStatus(ctx, instance, logger, getReplicationState(instance), msg)
-				if uErr != nil {
-					logger.Error(uErr, "failed to update volumeReplication status", "VRName", instance.Name)
-				}
-
-				logger.Info("destination info not yet available, requeuing", "VRName",
-					instance.Name, "RequeueAfter", destinationInfoPendingRequeue)
-
-				return ctrl.Result{Requeue: true, RequeueAfter: destinationInfoPendingRequeue}, nil
+			uErr := r.updateReplicationStatus(ctx, instance, logger, getReplicationState(instance), msg)
+			if uErr != nil {
+				logger.Error(uErr, "failed to update volumeReplication status", "VRName", instance.Name)
 			}
+
+			return ctrl.Result{}, destErr
 		}
+
+		instance.Status.DestinationVolumeID = destinationVolumeID
+		setDestinationInfoAvailableCondition(&instance.Status.Conditions, instance.Generation,
+			instance.Spec.DataSource.Kind)
+		logger.Info("destination volume id resolved", "VRName", instance.Name, "DestinationVolumeID", destinationVolumeID)
 	}
 
 	err = r.updateReplicationStatus(ctx, instance, logger, getReplicationState(instance), msg)
@@ -1017,12 +1008,12 @@ func (r *VolumeReplicationReconciler) getVolumeReplicationInfo(
 	return infoResp, nil
 }
 
-func (r *VolumeReplicationReconciler) getReplicationDestinationInfo(
+func (r *VolumeReplicationReconciler) getReplicationDestinationVolumeID(
 	instance *replicationv1alpha1.VolumeReplication,
 	logger logr.Logger,
 	replicationSource *replicationlib.ReplicationSource,
 	secrets map[string]string,
-) (*replicationlib.GetReplicationDestinationInfoResponse, error) {
+) (string, error) {
 	params := replication.CommonRequestParameters{
 		ReplicationSource: replicationSource,
 		Secrets:           secrets,
@@ -1034,28 +1025,57 @@ func (r *VolumeReplicationReconciler) getReplicationDestinationInfo(
 	resp := vr.GetDestinationInfo()
 
 	if resp.Error != nil {
-		logger.Error(resp.Error, "failed to get replication destination info", "VRName", instance.Name)
+		logger.Error(resp.Error, "failed to get replication destination info, will retry", "VRName", instance.Name)
 
-		if isKnownError := resp.HasKnownGRPCError(getReplicationDestinationInfoKnownErrors); isKnownError {
-			logger.Info("replication destination info not found or not implemented, skipping",
-				"VRName", instance.Name)
-
-			return nil, nil //nolint:nilnil
-		}
-
-		return nil, resp.Error
+		return "", resp.Error
 	}
 
 	destResp, ok := resp.Response.(*replicationlib.GetReplicationDestinationInfoResponse)
-
 	if !ok {
-		err := fmt.Errorf("received response of unexpected type")
-		logger.Error(err, "unable to parse GetReplicationDestinationInfo response", "VRName", instance.Name)
+		err := fmt.Errorf("received response of unexpected type for GetReplicationDestinationInfo")
+		logger.Error(err, "failed to get replication destination info, will retry", "VRName", instance.Name)
 
-		return nil, err
+		return "", err
 	}
 
-	return destResp, nil
+	destinationVolumeID := destResp.GetReplicationDestination().GetVolume().GetVolumeId()
+	if destinationVolumeID == "" {
+		err := fmt.Errorf("replication destination volume ID is empty: the storage reports no remote volume " +
+			"for this volume yet")
+		logger.Error(err, "failed to get replication destination info, will retry", "VRName", instance.Name)
+
+		return "", err
+	}
+
+	return destinationVolumeID, nil
+}
+
+func (r *VolumeReplicationReconciler) ensureDestinationInfoCondition(
+	ctx context.Context,
+	logger logr.Logger,
+	instance *replicationv1alpha1.VolumeReplication,
+) error {
+	if findCondition(instance.Status.Conditions, ConditionDestinationInfoAvailable) != nil {
+		return nil
+	}
+
+	setDestinationInfoPendingCondition(&instance.Status.Conditions, instance.Generation,
+		instance.Spec.DataSource.Kind)
+
+	err := r.Status().Update(ctx, instance)
+	if err != nil {
+		logger.Error(err, "failed to set destination info pending condition", "VRName", instance.Name)
+
+		return err
+	}
+
+	return nil
+}
+
+func isDestinationInfoAvailable(instance *replicationv1alpha1.VolumeReplication) bool {
+	condition := findCondition(instance.Status.Conditions, ConditionDestinationInfoAvailable)
+
+	return condition != nil && condition.Status == metav1.ConditionTrue && instance.Status.DestinationVolumeID != ""
 }
 
 func getInfoReconcileInterval(parameters map[string]string, logger logr.Logger) time.Duration {
