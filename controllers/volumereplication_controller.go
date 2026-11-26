@@ -523,8 +523,6 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			if protoTimestamp != nil {
 				lastSyncTime := metav1.NewTime(protoTimestamp.AsTime())
 				instance.Status.LastSyncTime = &lastSyncTime
-			} else {
-				instance.Status.LastSyncTime = nil
 			}
 
 			protoDuration := info.GetLastSyncDuration()
@@ -549,6 +547,7 @@ func (r *VolumeReplicationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if instance.Spec.ReplicationState == replicationv1alpha1.Secondary {
+		instance.Status.LastSyncTime = nil
 		// the Replicating condition is reported only for a primary volume
 		instance.Status.Conditions = removeCondition(&instance.Status.Conditions, ConditionReplicating)
 	}
